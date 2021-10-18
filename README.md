@@ -9,3 +9,5 @@ NRP              | Nama
 05111940000177   | Aflah Hilmy
 05111940000227   | Rayhan Daffa Alhafish
 05111940000233   | Aristya Vika 
+
+Kami akan membuat stack-game dengan menggunakan Three JS
