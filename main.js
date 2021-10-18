@@ -1,291 +1,304 @@
-import * as THREE from 'https://threejsfundamentals.org/threejs/resources/threejs/r132/build/three.module.js';
-import {
-    PointerLockControls
-} from 'https://threejsfundamentals.org/threejs/resources/threejs/r132/examples/jsm/controls/PointerLockControls.js';
 
+window.focus(); // Capture keys right away (by default focus is on editor)
 
-let camera, scene, renderer, controls;
+let camera, scene, renderer; 
+let world; 
+let lastTime; 
+let stack; 
+let overhangs; // Overhanging parts that fall down
+const boxHeight = 1; // Height of each layer
+const originalBoxSize = 3; // Original width and height of a box
+let autopilot;
+let gameEnded;
+let robotPrecision; // Determines how precise the game is on autopilot
 
-const objects = [];
-
-let raycaster;
-
-let moveForward = false;
-let moveBackward = false;
-let moveLeft = false;
-let moveRight = false;
-let canJump = false;
-
-let prevTime = performance.now();
-const velocity = new THREE.Vector3();
-const direction = new THREE.Vector3();
-const vertex = new THREE.Vector3();
-const color = new THREE.Color();
+const scoreElement = document.getElementById("score");
+const instructionsElement = document.getElementById("instructions");
+const resultsElement = document.getElementById("results");
 
 init();
-animate();
+
+// Determines how precise the game is on autopilot
+function setRobotPrecision() {
+  robotPrecision = Math.random() * 1 - 0.5;
+}
 
 function init() {
+  autopilot = true;
+  gameEnded = false;
+  lastTime = 0;
+  stack = [];
+  overhangs = [];
+  setRobotPrecision();
 
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 1000);
-    camera.position.y = 10;
+  // Initialize ThreeJs
+  const aspect = window.innerWidth / window.innerHeight;
+  const width = 10;
+  const height = width / aspect;
 
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xffffff);
-    scene.fog = new THREE.Fog(0xffffff, 0, 750);
+  camera = new THREE.OrthographicCamera(
+    width / -2, // left
+    width / 2, // right
+    height / 2, // top
+    height / -2, // bottom
+    0, // near plane
+    100 // far plane
+  );
 
-    const light = new THREE.HemisphereLight(0xeeeeff, 0x777788, 0.75);
-    light.position.set(0.5, 1, 0.75);
-    scene.add(light);
+  
+  // If you want to use perspective camera instead, uncomment these lines
+  camera = new THREE.PerspectiveCamera(
+    45, // field of view
+    aspect, // aspect ratio
+    1, // near plane
+    100 // far plane
+  );
+  
 
-    controls = new PointerLockControls(camera, document.body);
+  camera.position.set(4, 4, 4);
+  camera.lookAt(0, 0, 0);
 
-    const blocker = document.getElementById('blocker');
-    const instructions = document.getElementById('instructions');
+  scene = new THREE.Scene();
 
-    instructions.addEventListener('click', function () {
+  // Foundation
+  addLayer(0, 0, originalBoxSize, originalBoxSize);
 
-        controls.lock();
+  // First layer
+  addLayer(-10, 0, originalBoxSize, originalBoxSize, "x");
 
-    });
+  // Set up lights
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambientLight);
 
-    controls.addEventListener('lock', function () {
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+  dirLight.position.set(10, 20, 0);
+  scene.add(dirLight);
 
-        instructions.style.display = 'none';
-        blocker.style.display = 'none';
+  // Set up renderer
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setAnimationLoop(animation);
+  document.body.appendChild(renderer.domElement);
+}
 
-    });
+function startGame() {
+  autopilot = false;
+  gameEnded = false;
+  lastTime = 0;
+  stack = [];
+  overhangs = [];
 
-    controls.addEventListener('unlock', function () {
+  if (instructionsElement) instructionsElement.style.display = "none";
+  if (resultsElement) resultsElement.style.display = "none";
+  if (scoreElement) scoreElement.innerText = 0;
 
-        blocker.style.display = 'block';
-        instructions.style.display = '';
 
-    });
-
-    scene.add(controls.getObject());
-
-    const onKeyDown = function (event) {
-
-        switch (event.code) {
-
-            case 'ArrowUp':
-            case 'KeyW':
-                moveForward = true;
-                break;
-
-            case 'ArrowLeft':
-            case 'KeyA':
-                moveLeft = true;
-                break;
-
-            case 'ArrowDown':
-            case 'KeyS':
-                moveBackward = true;
-                break;
-
-            case 'ArrowRight':
-            case 'KeyD':
-                moveRight = true;
-                break;
-
-            case 'Space':
-                if (canJump === true) velocity.y += 350;
-                canJump = false;
-                break;
-
-        }
-
-    };
-
-    const onKeyUp = function (event) {
-
-        switch (event.code) {
-
-            case 'ArrowUp':
-            case 'KeyW':
-                moveForward = false;
-                break;
-
-            case 'ArrowLeft':
-            case 'KeyA':
-                moveLeft = false;
-                break;
-
-            case 'ArrowDown':
-            case 'KeyS':
-                moveBackward = false;
-                break;
-
-            case 'ArrowRight':
-            case 'KeyD':
-                moveRight = false;
-                break;
-
-        }
-
-    };
-
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('keyup', onKeyUp);
-
-    raycaster = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0), 0, 10);
-
-    // floor
-
-    let floorGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100);
-    floorGeometry.rotateX(-Math.PI / 2);
-
-    // vertex displacement
-
-    let position = floorGeometry.attributes.position;
-
-    for (let i = 0, l = position.count; i < l; i++) {
-
-        vertex.fromBufferAttribute(position, i);
-
-        vertex.x += Math.random() * 20 - 10;
-        vertex.y += Math.random() * 2;
-        vertex.z += Math.random() * 20 - 10;
-
-        position.setXYZ(i, vertex.x, vertex.y, vertex.z);
-
+  if (scene) {
+    // Remove every Mesh from the scene
+    while (scene.children.find((c) => c.type == "Mesh")) {
+      const mesh = scene.children.find((c) => c.type == "Mesh");
+      scene.remove(mesh);
     }
 
-    floorGeometry = floorGeometry.toNonIndexed(); // ensure each face has unique vertices
+    // Foundation
+    addLayer(0, 0, originalBoxSize, originalBoxSize);
 
-    position = floorGeometry.attributes.position;
-    const colorsFloor = [];
+    // First layer
+    addLayer(-10, 0, originalBoxSize, originalBoxSize, "x");
+  }
 
-    for (let i = 0, l = position.count; i < l; i++) {
+  if (camera) {
+    // Reset camera positions
+    camera.position.set(4, 4, 4);
+    camera.lookAt(0, 0, 0);
+  }
+}
 
-        color.setHSL(Math.random() * 0.3 + 0.5, 0.75, Math.random() * 0.25 + 0.75);
-        colorsFloor.push(color.r, color.g, color.b);
+function addLayer(x, z, width, depth, direction) {
+  const y = boxHeight * stack.length; // Add the new box one layer higher
+  const layer = generateBox(x, y, z, width, depth, false);
+  layer.direction = direction;
+  stack.push(layer);
+}
 
-    }
+function addOverhang(x, z, width, depth) {
+  const y = boxHeight * (stack.length - 1); // Add the new box one the same layer
+  const overhang = generateBox(x, y, z, width, depth, true);
+  overhangs.push(overhang);
+}
 
-    floorGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colorsFloor, 3));
+function generateBox(x, y, z, width, depth, falls) {
+  // ThreeJS
+  const geometry = new THREE.BoxGeometry(width, boxHeight, depth);
+  const color = new THREE.Color(`hsl(${30 + stack.length * 4}, 100%, 50%)`);
+  const material = new THREE.MeshLambertMaterial({ color });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(x, y, z);
+  scene.add(mesh);
 
-    const floorMaterial = new THREE.MeshBasicMaterial({
-        vertexColors: true
-    });
+  return {
+    threejs: mesh,
+    // cannonjs: body,
+    width,
+    depth
+  };
+}
 
-    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
-    scene.add(floor);
+function cutBox(topLayer, overlap, size, delta) {
+  const direction = topLayer.direction;
+  const newWidth = direction == "x" ? overlap : topLayer.width;
+  const newDepth = direction == "z" ? overlap : topLayer.depth;
 
-    // objects
+  // Update metadata
+  topLayer.width = newWidth;
+  topLayer.depth = newDepth;
 
-    const boxGeometry = new THREE.BoxGeometry(20, 20, 20).toNonIndexed();
-
-    position = boxGeometry.attributes.position;
-    const colorsBox = [];
-
-    for (let i = 0, l = position.count; i < l; i++) {
-
-        color.setHSL(Math.random() * 0.3 + 0.5, 0.75, Math.random() * 0.25 + 0.75);
-        colorsBox.push(color.r, color.g, color.b);
-
-    }
-
-    boxGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colorsBox, 3));
-
-    for (let i = 0; i < 500; i++) {
-
-        const boxMaterial = new THREE.MeshPhongMaterial({
-            specular: 0xffffff,
-            flatShading: true,
-            vertexColors: true
-        });
-        boxMaterial.color.setHSL(Math.random() * 0.2 + 0.5, 0.75, Math.random() * 0.25 + 0.75);
-
-        const box = new THREE.Mesh(boxGeometry, boxMaterial);
-        box.position.x = Math.floor(Math.random() * 20 - 10) * 20;
-        box.position.y = Math.floor(Math.random() * 20) * 20 + 10;
-        box.position.z = Math.floor(Math.random() * 20 - 10) * 20;
-
-        scene.add(box);
-        objects.push(box);
-
-    }
-
-    //
-
-    renderer = new THREE.WebGLRenderer({
-        antialias: true
-    });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
-
-    //
-
-    window.addEventListener('resize', onWindowResize);
+  // Update ThreeJS model
+  topLayer.threejs.scale[direction] = overlap / size;
+  topLayer.threejs.position[direction] -= delta / 2;
 
 }
 
-function onWindowResize() {
+window.addEventListener("mousedown", eventHandler);
+window.addEventListener("touchstart", eventHandler);
+window.addEventListener("keydown", function (event) {
+  if (event.key == " ") {
+    event.preventDefault();
+    eventHandler();
+    return;
+  }
+  if (event.key == "R" || event.key == "r") {
+    event.preventDefault();
+    startGame();
+    return;
+  }
+});
 
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-
-    renderer.setSize(window.innerWidth, window.innerHeight);
-
+function eventHandler() {
+  if (autopilot) startGame();
+  else splitBlockAndAddNextOneIfOverlaps();
 }
 
-function animate() {
+function splitBlockAndAddNextOneIfOverlaps() {
+  if (gameEnded) return;
 
-    requestAnimationFrame(animate);
+  const topLayer = stack[stack.length - 1];
+  const previousLayer = stack[stack.length - 2];
 
-    const time = performance.now();
+  const direction = topLayer.direction;
 
-    if (controls.isLocked === true) {
+  const size = direction == "x" ? topLayer.width : topLayer.depth;
+  const delta =
+    topLayer.threejs.position[direction] -
+    previousLayer.threejs.position[direction];
+  const overhangSize = Math.abs(delta);
+  const overlap = size - overhangSize;
 
-        raycaster.ray.origin.copy(controls.getObject().position);
-        raycaster.ray.origin.y -= 10;
+  if (overlap > 0) {
+    cutBox(topLayer, overlap, size, delta);
 
-        const intersections = raycaster.intersectObjects(objects, false);
+    // Overhang
+    const overhangShift = (overlap / 2 + overhangSize / 2) * Math.sign(delta);
+    const overhangX =
+      direction == "x"
+        ? topLayer.threejs.position.x + overhangShift
+        : topLayer.threejs.position.x;
+    const overhangZ =
+      direction == "z"
+        ? topLayer.threejs.position.z + overhangShift
+        : topLayer.threejs.position.z;
+    const overhangWidth = direction == "x" ? overhangSize : topLayer.width;
+    const overhangDepth = direction == "z" ? overhangSize : topLayer.depth;
 
-        const onObject = intersections.length > 0;
+    addOverhang(overhangX, overhangZ, overhangWidth, overhangDepth);
 
-        const delta = (time - prevTime) / 1000;
+    // Next layer
+    const nextX = direction == "x" ? topLayer.threejs.position.x : -10;
+    const nextZ = direction == "z" ? topLayer.threejs.position.z : -10;
+    const newWidth = topLayer.width; // New layer has the same size as the cut top layer
+    const newDepth = topLayer.depth; // New layer has the same size as the cut top layer
+    const nextDirection = direction == "x" ? "z" : "x";
 
-        velocity.x -= velocity.x * 10.0 * delta;
-        velocity.z -= velocity.z * 10.0 * delta;
+    if (scoreElement) scoreElement.innerText = stack.length - 1;
+    addLayer(nextX, nextZ, newWidth, newDepth, nextDirection);
+  } else {
+    missedTheSpot();
+  }
+}
 
-        velocity.y -= 9.8 * 100.0 * delta; // 100.0 = mass
+function missedTheSpot() {
+  const topLayer = stack[stack.length - 1];
 
-        direction.z = Number(moveForward) - Number(moveBackward);
-        direction.x = Number(moveRight) - Number(moveLeft);
-        direction.normalize(); // this ensures consistent movements in all directions
+  // Turn to top layer into an overhang and let it fall down
+  addOverhang(
+    topLayer.threejs.position.x,
+    topLayer.threejs.position.z,
+    topLayer.width,
+    topLayer.depth
+  );
 
-        if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
-        if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
+  gameEnded = true;
+  if (resultsElement && !autopilot) resultsElement.style.display = "flex";
+}
 
-        if (onObject === true) {
+function animation(time) {
+  if (lastTime) {
+    const timePassed = time - lastTime;
+    const speed = 0.008;
 
-            velocity.y = Math.max(0, velocity.y);
-            canJump = true;
+    const topLayer = stack[stack.length - 1];
+    const previousLayer = stack[stack.length - 2];
 
-        }
+    const boxShouldMove =
+      !gameEnded &&
+      (!autopilot ||
+        (autopilot &&
+          topLayer.threejs.position[topLayer.direction] <
+            previousLayer.threejs.position[topLayer.direction] +
+              robotPrecision));
 
-        controls.moveRight(-velocity.x * delta);
-        controls.moveForward(-velocity.z * delta);
+    if (boxShouldMove) {
+      // Keep the position visible on UI and the position in the model in sync
+      topLayer.threejs.position[topLayer.direction] += speed * timePassed;
 
-        controls.getObject().position.y += (velocity.y * delta); // new behavior
-
-        if (controls.getObject().position.y < 10) {
-
-            velocity.y = 0;
-            controls.getObject().position.y = 10;
-
-            canJump = true;
-
-        }
-
+      // If the box went beyond the stack then show up the fail screen
+      if (topLayer.threejs.position[topLayer.direction] > 10) {
+        missedTheSpot();
+      }
+    } else {
+    
+      if (autopilot) {
+        splitBlockAndAddNextOneIfOverlaps();
+        setRobotPrecision();
+      }
     }
 
-    prevTime = time;
+    // 4 is the initial camera height
+    if (camera.position.y < boxHeight * (stack.length - 2) + 4) {
+      camera.position.y += speed * timePassed;
+    }
 
+    updatePhysics(timePassed);
     renderer.render(scene, camera);
+  }
+  lastTime = time;
+}
+
+function updatePhysics(timePassed) {
 
 }
+
+window.addEventListener("resize", () => {
+  // Adjust camera
+  console.log("resize", window.innerWidth, window.innerHeight);
+  const aspect = window.innerWidth / window.innerHeight;
+  const width = 10;
+  const height = width / aspect;
+
+  camera.top = height / 2;
+  camera.bottom = height / -2;
+
+  // Reset renderer
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.render(scene, camera);
+});
